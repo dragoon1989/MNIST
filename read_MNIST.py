@@ -42,14 +42,14 @@ def load_mnist(path, kind='train'):
 def BuildPipeline(raw_data,
 				  batch_size,
 				  num_epoch=1):
-	''' input: raw_data	raw numpy MNIST data, recommend to use a python dict with 
+	''' input: raw_data	raw numpy MNIST data, recommend to use a python dict with
 					label: label data; image: image data
 			   batch_size
 			   num_epoch
 		output: dataset		a dataset '''
 	# slice the numpy data
 	dataset = tf.data.Dataset.from_tensor_slices(raw_data)
-	# repeat num_epoch 
+	# repeat num_epoch
 	dataset = dataset.repeat(num_epoch)
 	# shuffle
 	dataset = dataset.shuffle(10*batch_size)
@@ -57,5 +57,3 @@ def BuildPipeline(raw_data,
 	dataset = dataset.batch(batch_size)
 	# over
 	return dataset
-
-

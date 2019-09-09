@@ -13,14 +13,14 @@ from read_MNIST import BuildPipeline
 
 
 ############### global configs ################
-layer_sizes = [512, 1024, 1024]
+layer_sizes = [128]
 lr0 = 1e-2
 lr = tf.placeholder(dtype=tf.float32, shape=(), name='learning_rate')
 train_batch_size = 32
 test_batch_size = 32
 num_epochs = 50
 
-dataset_path = 'MNIST'
+dataset_path = 'data'
 # tensorboard summary will be saved as summary_path/summary_name
 summary_path = './tensorboard/'
 summary_name = 'summary-default'
@@ -36,13 +36,9 @@ np_train_data, np_train_label = load_mnist(dataset_path, 'train')
 np_test_data, np_test_label = load_mnist(dataset_path, 'test')
 
 with tf.name_scope('input-pipeline'):
-	# placeholder for feeding numpy data to dataset
-	np_images_plh = tf.placeholder(dtype=tf.uint8, shape=(None, MNIST_IMG_X*MNIST_IMG_Y))
-	np_labels_plh = tf.placeholder(dtype=tf.float32, shape=(None,))
-
 	# construct datasets from numpy data
-	train_dataset = BuildPipeline({'label': np_labels_plh, 'image': np_images_plh}, train_batch_size, 1)
-	test_dataset = BuildPipeline({'label': np_labels_plh, 'image': np_images_plh}, test_batch_size, 1)
+	train_dataset = BuildPipeline({'label': np_train_label, 'image': np_train_data}, train_batch_size, 1)
+	test_dataset = BuildPipeline({'label': np_test_label, 'image': np_test_data}, test_batch_size, 1)
 
 	# define iterators of datasets
 	train_iterator = train_dataset.make_initializable_iterator()
@@ -55,7 +51,8 @@ with tf.name_scope('input-pipeline'):
 	iterator_handle = tf.placeholder(dtype=tf.string, shape=None)
 	iterator = tf.data.Iterator.from_string_handle(iterator_handle, train_iterator.output_types)
 
-	images, labels = iterator.get_next()
+	images = iterator.get_next()['image']
+	labels = iterator.get_next()['label']
 
 ############### build the FC pipeline ################
 X = tf.placeholder(dtype=tf.uint8, shape=(None, MNIST_IMG_X*MNIST_IMG_Y))
@@ -74,6 +71,13 @@ train_op = tf.train.AdamOptimizer(learning_rate=lr,
 								  beta2=0.999,
 								  epsilon=1e-08).minimize(loss, global_step=global_step)
 
+# add summary
+with tf.name_scope('summary'):
+	tf.summary.scalar(name='loss', tensor=loss)			# summary the loss
+	tf.summary.scalar(name='accuracy', tensor=accuracy)	# summary the accuracy
+	tf.summary.histogram(name='y', values=y)
+
+
 # define the training process
 def train(cur_lr, sess, summary_writer, summary_op):
 	'''
@@ -86,28 +90,26 @@ def train(cur_lr, sess, summary_writer, summary_op):
 	# get iterator handles
 	train_dataset_handle_ = sess.run(train_dataset_handle)
 	# re-initialize the iterator (because the dataset only repeat one epoch)
-	sess.run(train_iterator.initializer, feed_dict={np_images_plh: np_train_data,
-													np_labels_plh: np_train_label})
+	sess.run(train_iterator.initializer)
 	# training loop
 	current_batch = 0
 	while True:
 		try:
 			# read batch of data from training dataset
-			train_img_, train_label_ = sess.run([images,labels], feed_dict={np_images_plh: np_train_data,
-																   np_labels_plh: np_train_label,
-																   iterator_handle: train_dataset_handle_})
+			train_img_, train_label_ = sess.run([images,labels], feed_dict={iterator_handle: train_dataset_handle_})
 			# feed this batch to FC
 			_, loss_, accuracy_, global_step_, summary_buff_ = \
 				sess.run([train_op, loss, accuracy, global_step, summary_op],
-						feed_dict={X : train_img_,
-								   Y : train_label_,
-								   lr: cur_lr})
+						 feed_dict={X : train_img_,
+								    Y : train_label_,
+								    lr: cur_lr})
 			current_batch += 1
 			# print indication info
 			if current_batch % 100 == 0:
 				print('\tbatch number = %d, loss = %.2f, acc = %.2f%%' % (current_batch, loss_, 100*accuracy_))
 				# write training summary
 				summary_writer.add_summary(summary=summary_buff_, global_step=global_step_)
+
 		except tf.errors.OutOfRangeError:
 			break
 	# over
@@ -122,8 +124,7 @@ def test(sess, summary_writer):
 	# get iterator handles
 	test_dataset_handle_ = sess.run(test_dataset_handle)
 	# re-initialize the iterator (because the dataset only repeat one epoch)
-	sess.run(test_iterator.initializer, feed_dict={np_images_plh: np_test_data, 
-												   np_labels_plh: np_test_label})
+	sess.run(test_iterator.initializer)
 	# validation loop
 	correctness = 0
 	loss_val = 0
@@ -131,18 +132,16 @@ def test(sess, summary_writer):
 	while True:
 		try:
 			# read batch of data from test dataset
-			test_img_, test_label_ = sess.run([images,labels], feed_dict={np_images_plh: np_test_data,
-																 np_labels_plh: np_test_label,
-																 iterator_handle: test_dataset_handle_})
+			test_img_, test_label_ = sess.run([images,labels], feed_dict={iterator_handle: test_dataset_handle_})
 			cur_batch_size = test_img_.shape[0]
 			test_dataset_size += cur_batch_size
 			# test on single batch
 			batch_accuracy_, batch_loss_, global_step_ = \
-						sess.run([accuracy, loss, global_step], feed_dict={X : test_img_, 
+						sess.run([accuracy, loss, global_step], feed_dict={X : test_img_,
 																		   Y : test_label_})
 
-			correctness += np.asscalar(batch_accuracy_*cur_batch_size*IMG_X*IMG_Y)
-			loss_val += np.asscalar(loss_*cur_batch_size)
+			correctness += np.asscalar(batch_accuracy_*cur_batch_size*MNIST_IMG_X*MNIST_IMG_Y)
+			loss_val += np.asscalar(batch_loss_*cur_batch_size)
 		except tf.errors.OutOfRangeError:
 			break
 	# compute accuracy and loss after a whole epoch
@@ -155,7 +154,7 @@ def test(sess, summary_writer):
 	# write summary
 	summary_writer.add_summary(summary=test_acc_summary, global_step=global_step_)
 	summary_writer.add_summary(summary=test_loss_summary, global_step=global_step_)
-	
+
 	# print message
 	print(msg)
 	# over
@@ -214,6 +213,7 @@ if __name__ == "__main__":
 			print('Current epoch No.%d, learning rate = %.2e' % (cur_epoch, cur_lr))
 			# train
 			train(cur_lr, sess, summary_writer, train_summary_op)
+
 			# validate
 			cur_acc = test(sess, summary_writer)
 			# update learning rate if necessary
@@ -227,6 +227,7 @@ if __name__ == "__main__":
 			else:
 				# print message
 				print('model not improved.')
+
 	# finished
 	print('++++++++++++++++++++++++++++++++++++++++')
 	print('best accuracy = %.2f%%.'%(best_acc*100))
